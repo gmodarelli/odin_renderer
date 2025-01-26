@@ -94,7 +94,7 @@ Descriptor_Heap_Variant :: union {
 @(private)
 renderer: Renderer
 
-initialize_renderer :: proc(window_handle: rawptr, width: u32, height: u32) {
+renderer_create :: proc(window_handle: rawptr, width: u32, height: u32) {
 	// Create DXGI Factory
 	{
 		factory_flags: dxgi.CREATE_FACTORY
@@ -150,20 +150,20 @@ initialize_renderer :: proc(window_handle: rawptr, width: u32, height: u32) {
 		check_hr(hr, "Failed to create allocator")
 	}
 
-	create_command_queue(&renderer.graphics_queue, .DIRECT, "Graphics Queue")
+	command_queue_create(&renderer.graphics_queue, .DIRECT, "Graphics Queue")
 
-	create_staging_descriptor_heap(&renderer.rtv_descriptor_heap, .RTV,
+	staging_descriptor_heap_create(&renderer.rtv_descriptor_heap, .RTV,
 									NUM_RTV_STAGING_DESCRIPTORS, false, "RTV Descriptor Heap")
-	create_staging_descriptor_heap(&renderer.dsv_descriptor_heap, .DSV,
+	staging_descriptor_heap_create(&renderer.dsv_descriptor_heap, .DSV,
 									NUM_DSV_STAGING_DESCRIPTORS, false, "DSV Descriptor Heap")
-	create_staging_descriptor_heap(&renderer.srv_descriptor_heap, .CBV_SRV_UAV,
+	staging_descriptor_heap_create(&renderer.srv_descriptor_heap, .CBV_SRV_UAV,
 									NUM_SRV_STAGING_DESCRIPTORS, false, "SRV Descriptor Heap")
 	
-	create_render_pass_descriptor_heap(&renderer.sampler_descriptor_heap, .SAMPLER,
+	render_pass_descriptor_heap_create(&renderer.sampler_descriptor_heap, .SAMPLER,
 										0, NUM_SAMPLER_DESCRIPTORS, "Sampler Descriptor Heap")
 
 	for i in 0..<NUM_FRAMES_IN_FLIGHT {
-		create_render_pass_descriptor_heap(&renderer.srv_descriptor_heaps[i], .CBV_SRV_UAV,
+		render_pass_descriptor_heap_create(&renderer.srv_descriptor_heaps[i], .CBV_SRV_UAV,
 											NUM_RESERVED_SRV_DESCRIPTORS, NUM_SRV_RENDER_PASS_USER_DESCRIPTORS,
 											"SRV Render Pass Descriptor Heap")
 	}
@@ -173,7 +173,7 @@ initialize_renderer :: proc(window_handle: rawptr, width: u32, height: u32) {
 	}
 	renderer.free_reserved_descriptor_indices_cursor = NUM_RESERVED_SRV_DESCRIPTORS - 1
 
-	create_swap_chain(cast(dxgi.HWND)window_handle, width, height)
+	swap_chain_create(cast(dxgi.HWND)window_handle, width, height)
 
 	/*
 	// Testing resource allocation
@@ -206,20 +206,20 @@ initialize_renderer :: proc(window_handle: rawptr, width: u32, height: u32) {
 	*/
 }
 
-destroy_renderer :: proc() {
-	destroy_swap_chain()
+renderer_destroy :: proc() {
+	swap_chain_destroy()
 
 	d3d12ma.DestroyAllocator(renderer.allocator)
 
-	destroy_command_queue(renderer.graphics_queue)
+	command_queue_destroy(renderer.graphics_queue)
 
-	destroy_descriptor_heap(&renderer.sampler_descriptor_heap)
-	destroy_descriptor_heap(&renderer.srv_descriptor_heap)
-	destroy_descriptor_heap(&renderer.dsv_descriptor_heap)
-	destroy_descriptor_heap(&renderer.rtv_descriptor_heap)
+	descriptor_heap_destroy(&renderer.sampler_descriptor_heap)
+	descriptor_heap_destroy(&renderer.srv_descriptor_heap)
+	descriptor_heap_destroy(&renderer.dsv_descriptor_heap)
+	descriptor_heap_destroy(&renderer.rtv_descriptor_heap)
 
 	for i in 0..<NUM_FRAMES_IN_FLIGHT {
-		destroy_descriptor_heap(&renderer.srv_descriptor_heaps[i])
+		descriptor_heap_destroy(&renderer.srv_descriptor_heaps[i])
 	}
 
 	renderer.device->Release()
@@ -245,7 +245,7 @@ destroy_renderer :: proc() {
 }
 
 @(private)
-create_command_queue :: proc(queue: ^^d3d12.ICommandQueue, type: d3d12.COMMAND_LIST_TYPE, debug_name: string) {
+command_queue_create :: proc(queue: ^^d3d12.ICommandQueue, type: d3d12.COMMAND_LIST_TYPE, debug_name: string) {
 	desc := d3d12.COMMAND_QUEUE_DESC{
 		Type = type,
 	}
@@ -261,14 +261,14 @@ create_command_queue :: proc(queue: ^^d3d12.ICommandQueue, type: d3d12.COMMAND_L
 }
 
 @(private)
-destroy_command_queue :: proc(queue: ^d3d12.ICommandQueue) {
+command_queue_destroy :: proc(queue: ^d3d12.ICommandQueue) {
 	if queue != nil {
 		queue->Release()
 	}
 }
 
 @(private)
-create_descriptor_heap :: proc(descriptor_heap: ^Descriptor_Heap, type: d3d12.DESCRIPTOR_HEAP_TYPE, num_descriptors: u32, is_shader_visible: bool, debug_name: string) {
+descriptor_heap_create :: proc(descriptor_heap: ^Descriptor_Heap, type: d3d12.DESCRIPTOR_HEAP_TYPE, num_descriptors: u32, is_shader_visible: bool, debug_name: string) {
 	descriptor_heap.type = type
 	descriptor_heap.max_descriptors = num_descriptors
 	descriptor_heap.is_shader_visible = is_shader_visible
@@ -298,8 +298,8 @@ create_descriptor_heap :: proc(descriptor_heap: ^Descriptor_Heap, type: d3d12.DE
 }
 
 @(private)
-create_staging_descriptor_heap :: proc(descriptor_heap: ^Descriptor_Heap, type: d3d12.DESCRIPTOR_HEAP_TYPE, num_descriptors: u32, is_shader_visible: bool, debug_name: string) {
-	create_descriptor_heap(descriptor_heap, type, num_descriptors, is_shader_visible, debug_name)
+staging_descriptor_heap_create :: proc(descriptor_heap: ^Descriptor_Heap, type: d3d12.DESCRIPTOR_HEAP_TYPE, num_descriptors: u32, is_shader_visible: bool, debug_name: string) {
+	descriptor_heap_create(descriptor_heap, type, num_descriptors, is_shader_visible, debug_name)
 
 	descriptor_heap.variant = Descriptor_Heap_Staging {
 		free_descriptors = make([]u32, descriptor_heap.max_descriptors),
@@ -310,7 +310,7 @@ create_staging_descriptor_heap :: proc(descriptor_heap: ^Descriptor_Heap, type: 
 }
 
 @(private)
-destroy_descriptor_heap :: proc(descriptor_heap: ^Descriptor_Heap) {
+descriptor_heap_destroy :: proc(descriptor_heap: ^Descriptor_Heap) {
 	switch v in &descriptor_heap.variant {
 		case Descriptor_Heap_Staging:
 			descriptor_heap.heap->Release()
@@ -324,13 +324,8 @@ destroy_descriptor_heap :: proc(descriptor_heap: ^Descriptor_Heap) {
 }
 
 @(private)
-destroy_render_pass_descriptor_heap :: proc(descriptor_heap: ^Descriptor_Heap) {
-	descriptor_heap.heap->Release()
-}
-
-@(private)
-create_render_pass_descriptor_heap :: proc(descriptor_heap: ^Descriptor_Heap, type: d3d12.DESCRIPTOR_HEAP_TYPE, num_reserved_descriptors: u32, num_user_descriptors: u32, debug_name: string) {
-	create_descriptor_heap(descriptor_heap, type, num_reserved_descriptors + num_user_descriptors, true, debug_name)
+render_pass_descriptor_heap_create :: proc(descriptor_heap: ^Descriptor_Heap, type: d3d12.DESCRIPTOR_HEAP_TYPE, num_reserved_descriptors: u32, num_user_descriptors: u32, debug_name: string) {
+	descriptor_heap_create(descriptor_heap, type, num_reserved_descriptors + num_user_descriptors, true, debug_name)
 
 	descriptor_heap.variant = Descriptor_Heap_Render_Pass {
 		num_reserved_handles = num_reserved_descriptors,
@@ -339,7 +334,12 @@ create_render_pass_descriptor_heap :: proc(descriptor_heap: ^Descriptor_Heap, ty
 }
 
 @(private)
-create_swap_chain :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
+render_pass_descriptor_heap_destroy :: proc(descriptor_heap: ^Descriptor_Heap) {
+	descriptor_heap.heap->Release()
+}
+
+@(private)
+swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 	assert(renderer.factory != nil, "Factory not initialized")
 	assert(renderer.device != nil, "Device not initialized")
 	assert(renderer.graphics_queue != nil, "Graphics command queue not initialized")
@@ -376,7 +376,7 @@ create_swap_chain :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 }
 
 @(private)
-destroy_swap_chain :: proc() {
+swap_chain_destroy :: proc() {
 	if renderer.swap_chain != nil {
 		renderer.swap_chain->Release()
 		renderer.swap_chain = nil

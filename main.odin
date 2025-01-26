@@ -47,8 +47,8 @@ main :: proc() {
 	sdl.GetWindowWMInfo(sdl_window, &window_info)
 	window_handle := window_info.info.win.window
 
-	initialize_renderer(window_handle, 1920, 1080)
-	defer destroy_renderer()
+	renderer_create(window_handle, 1920, 1080)
+	defer renderer_destroy()
 
 	loop: for {
 		event: sdl.Event
