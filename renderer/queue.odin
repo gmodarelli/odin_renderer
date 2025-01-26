@@ -1,4 +1,4 @@
-package main
+package renderer
 
 import "core:fmt"
 import "core:sync"
@@ -25,14 +25,14 @@ queue_create :: proc(queue: ^Queue, type: d3d12.COMMAND_LIST_TYPE, debug_name: s
 		Type = type,
 	}
 
-	hr := renderer.device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, cast(^rawptr)&queue.queue);
+	hr := rctx.device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, cast(^rawptr)&queue.queue);
 	check_hr(hr, "Failed to create command queue")
 
 	when ODIN_DEBUG {
 		queue.queue->SetName(windows.utf8_to_wstring(debug_name))
 	}
 
-	hr = renderer.device->CreateFence(0, {}, d3d12.IFence_UUID, cast(^rawptr)&queue.fence)
+	hr = rctx.device->CreateFence(0, {}, d3d12.IFence_UUID, cast(^rawptr)&queue.fence)
 	check_hr(hr, "Failed to create fence")
 	queue.fence_event_handle = windows.CreateEventW(nil, false, false, nil)
 	assert(queue.fence_event_handle != windows.INVALID_HANDLE_VALUE, "Failed to create event handle")

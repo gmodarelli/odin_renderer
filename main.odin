@@ -4,6 +4,9 @@ import "core:fmt"
 import "core:mem"
 import sdl "vendor:sdl2"
 
+import "renderer"
+import "logger"
+
 main :: proc() {
 	when ODIN_DEBUG {
 		track: mem.Tracking_Allocator
@@ -15,7 +18,7 @@ main :: proc() {
 				for _, entry in track.allocation_map {
 					buf: [128]byte
 					message := fmt.bprintf(buf[:], "%v leaked %v bytes\n", entry.location, entry.size)
-					log(message)
+					logger.log(message)
 				}
 			}
 
@@ -23,7 +26,7 @@ main :: proc() {
 				for entry in track.bad_free_array {
 					buf: [128]byte
 					message := fmt.bprintf(buf[:], "%v bad free at %v\n", entry.location, entry.memory)
-					log(message)
+					logger.log(message)
 				}
 			}
 			mem.tracking_allocator_destroy(&track)
@@ -31,14 +34,14 @@ main :: proc() {
 	}
 
 	if sdl.Init(sdl.INIT_VIDEO) < 0 {
-		log("Failed to initialize SDL")
+		logger.log("Failed to initialize SDL")
 		return
 	}
 	defer sdl.Quit()
 
 	sdl_window := sdl.CreateWindow("Odin D3D12", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, 1920, 1080, { .ALLOW_HIGHDPI, .SHOWN, .RESIZABLE })
 	if sdl_window == nil {
-		log("Failed to create SDL Window")
+		logger.log("Failed to create SDL Window")
 		return
 	}
 	defer sdl.DestroyWindow(sdl_window)
@@ -48,8 +51,8 @@ main :: proc() {
 	sdl.GetWindowWMInfo(sdl_window, &window_info)
 	window_handle := window_info.info.win.window
 
-	renderer_create(window_handle, 1920, 1080)
-	defer renderer_destroy()
+	renderer.create(window_handle, 1920, 1080)
+	defer renderer.destroy()
 
 	loop: for {
 		event: sdl.Event
@@ -68,18 +71,18 @@ main :: proc() {
 
 					buf: [128]byte
 					message := fmt.bprintf(buf[:], "Window resized: %vx%v", new_width, new_height)
-					log(message)
+					logger.log(message)
 
 					if new_width > 0 && new_height > 0 {
-						renderer_handle_resize(new_width, new_height)
+						renderer.handle_resize(new_width, new_height)
 					}
 					break
 				case .MINIMIZED:
-					log("Window minimized")
+					logger.log("Window minimized")
 					is_window_minimized = true
 					break
 				case .RESTORED:
-					log("Window restored")
+					logger.log("Window restored")
 					is_window_minimized = false
 					break
 				}
@@ -90,7 +93,7 @@ main :: proc() {
 		}
 
 		if !is_window_minimized {
-			renderer_draw()
+			renderer.render()
 		}
 	}
 }

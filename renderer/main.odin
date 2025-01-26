@@ -1,4 +1,4 @@
-package main
+package renderer
 
 import "core:fmt"
 import "core:os"
@@ -7,7 +7,8 @@ import windows "core:sys/windows"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
 
-import "d3d12ma"
+import d3d12ma "../d3d12ma"
+import logger "../logger"
 
 SWAP_CHAIN_BUFFER_COUNT :: 3
 NUM_FRAMES_IN_FLIGHT :: 2
@@ -92,50 +93,50 @@ Descriptor_Heap_Variant :: union {
 	Descriptor_Heap_Render_Pass,
 }
 
-renderer: Renderer
+rctx: Renderer
 
-renderer_create :: proc(window_handle: rawptr, width: u32, height: u32) {
+create :: proc(window_handle: rawptr, width: u32, height: u32) {
 	// Create DXGI Factory
 	{
 		factory_flags: dxgi.CREATE_FACTORY
 		when ODIN_DEBUG {
 			factory_flags += { .DEBUG }
 		}
-		hr := dxgi.CreateDXGIFactory2(factory_flags, dxgi.IFactory7_UUID, cast(^rawptr)&renderer.factory)
+		hr := dxgi.CreateDXGIFactory2(factory_flags, dxgi.IFactory7_UUID, cast(^rawptr)&rctx.factory)
 		check_hr(hr, "Failed to create factory")
 	}
 
 	when ODIN_DEBUG {
-		hr := d3d12.GetDebugInterface(d3d12.IDebug5_UUID, cast(^rawptr)&renderer.debug)
+		hr := d3d12.GetDebugInterface(d3d12.IDebug5_UUID, cast(^rawptr)&rctx.debug)
 		check_hr(hr, "Failed to get debug interface")
-		renderer.debug->EnableDebugLayer();
+		rctx.debug->EnableDebugLayer();
 	}
 
 	// Create Device
 	{
-		adapter_index, found := find_suitable_gpu(renderer.factory)
+		adapter_index, found := find_suitable_gpu(rctx.factory)
 		assert(found, "Failed to find a suitable GPU")
 
-		hr := renderer.factory->EnumAdapterByGpuPreference(adapter_index, .HIGH_PERFORMANCE, dxgi.IAdapter4_UUID, cast(^rawptr)&renderer.adapter)
+		hr := rctx.factory->EnumAdapterByGpuPreference(adapter_index, .HIGH_PERFORMANCE, dxgi.IAdapter4_UUID, cast(^rawptr)&rctx.adapter)
 		check_hr(hr, "Failed to get DXGI Adapters")
-		renderer.adapter->GetDesc3(&renderer.adapter_desc)
+		rctx.adapter->GetDesc3(&rctx.adapter_desc)
 
 		buf: [128]byte
-		message := fmt.bprintf(buf[:], "Selected GPU: %s", renderer.adapter_desc.Description)
-		log(message)
+		message := fmt.bprintf(buf[:], "Selected GPU: %s", rctx.adapter_desc.Description)
+		logger.log(message)
 
-		hr = d3d12.CreateDevice((^dxgi.IUnknown)(renderer.adapter), ._12_2, d3d12.IDevice5_UUID, cast(^rawptr)&renderer.device)
+		hr = d3d12.CreateDevice((^dxgi.IUnknown)(rctx.adapter), ._12_2, d3d12.IDevice5_UUID, cast(^rawptr)&rctx.device)
 		check_hr(hr, "Failed to create device")
 	}
 
 	when ODIN_DEBUG {
-		hr = renderer.device->QueryInterface(d3d12.IDebugDevice1_UUID, cast(^rawptr)&renderer.debug_device)
+		hr = rctx.device->QueryInterface(d3d12.IDebugDevice1_UUID, cast(^rawptr)&rctx.debug_device)
 		check_hr(hr, "Failed to query Debug Device")
 
-		hr = renderer.device->QueryInterface(d3d12.IInfoQueue1_UUID, cast(^rawptr)&renderer.info_queue)
+		hr = rctx.device->QueryInterface(d3d12.IInfoQueue1_UUID, cast(^rawptr)&rctx.info_queue)
 		check_hr(hr, "Failed to query Info Queue")
 
-		hr = renderer.info_queue->SetBreakOnSeverity(.ERROR, true)
+		hr = rctx.info_queue->SetBreakOnSeverity(.ERROR, true)
 		check_hr(hr, "Failed to set break on severity error")
 	}
 
@@ -143,35 +144,35 @@ renderer_create :: proc(window_handle: rawptr, width: u32, height: u32) {
 	{
 		allocator_desc := d3d12ma.ALLOCATOR_DESC {
 			Flags = { .DEFAULT_POOLS_NOT_ZEROED },
-			pDevice = renderer.device,
-			pAdapter = renderer.adapter,
+			pDevice = rctx.device,
+			pAdapter = rctx.adapter,
 		}
-		hr := d3d12ma.CreateAllocator(&allocator_desc, &renderer.allocator)
+		hr := d3d12ma.CreateAllocator(&allocator_desc, &rctx.allocator)
 		check_hr(hr, "Failed to create allocator")
 	}
 
-	queue_create(&renderer.graphics_queue, .DIRECT, "Graphics Queue")
+	queue_create(&rctx.graphics_queue, .DIRECT, "Graphics Queue")
 
-	staging_descriptor_heap_create(&renderer.rtv_descriptor_heap, .RTV,
+	staging_descriptor_heap_create(&rctx.rtv_descriptor_heap, .RTV,
 									NUM_RTV_STAGING_DESCRIPTORS, false, "RTV Descriptor Heap")
-	staging_descriptor_heap_create(&renderer.dsv_descriptor_heap, .DSV,
+	staging_descriptor_heap_create(&rctx.dsv_descriptor_heap, .DSV,
 									NUM_DSV_STAGING_DESCRIPTORS, false, "DSV Descriptor Heap")
-	staging_descriptor_heap_create(&renderer.srv_descriptor_heap, .CBV_SRV_UAV,
+	staging_descriptor_heap_create(&rctx.srv_descriptor_heap, .CBV_SRV_UAV,
 									NUM_SRV_STAGING_DESCRIPTORS, false, "SRV Descriptor Heap")
 	
-	render_pass_descriptor_heap_create(&renderer.sampler_descriptor_heap, .SAMPLER,
+	render_pass_descriptor_heap_create(&rctx.sampler_descriptor_heap, .SAMPLER,
 										0, NUM_SAMPLER_DESCRIPTORS, "Sampler Descriptor Heap")
 
 	for i in 0..<NUM_FRAMES_IN_FLIGHT {
-		render_pass_descriptor_heap_create(&renderer.srv_descriptor_heaps[i], .CBV_SRV_UAV,
+		render_pass_descriptor_heap_create(&rctx.srv_descriptor_heaps[i], .CBV_SRV_UAV,
 											NUM_RESERVED_SRV_DESCRIPTORS, NUM_SRV_RENDER_PASS_USER_DESCRIPTORS,
 											"SRV Render Pass Descriptor Heap")
 	}
 
 	for i in 0..<NUM_RESERVED_SRV_DESCRIPTORS {
-		renderer.free_reserved_descriptor_indices[i] = cast(u32)i
+		rctx.free_reserved_descriptor_indices[i] = cast(u32)i
 	}
-	renderer.free_reserved_descriptor_indices_cursor = NUM_RESERVED_SRV_DESCRIPTORS - 1
+	rctx.free_reserved_descriptor_indices_cursor = NUM_RESERVED_SRV_DESCRIPTORS - 1
 
 	swap_chain_create(cast(dxgi.HWND)window_handle, width, height)
 
@@ -193,7 +194,7 @@ renderer_create :: proc(window_handle: rawptr, width: u32, height: u32) {
 			HeapType = .DEFAULT,
 		}
 		resource_allocation: rawptr
-		hr := d3d12ma.CreateResource(renderer.allocator, &allocation_desc, &resource_desc, { .COPY_DEST }, nil, &resource_allocation,
+		hr := d3d12ma.CreateResource(rctx.allocator, &allocation_desc, &resource_desc, { .COPY_DEST }, nil, &resource_allocation,
 									d3d12.IResource1_UUID, cast(^rawptr)&resource)
 		check_hr(hr, "Failed to create resource")
 		defer {
@@ -206,62 +207,62 @@ renderer_create :: proc(window_handle: rawptr, width: u32, height: u32) {
 	*/
 }
 
-renderer_destroy :: proc() {
+destroy :: proc() {
 	wait_for_idle()
 
 	swap_chain_destroy()
 
-	d3d12ma.DestroyAllocator(renderer.allocator)
+	d3d12ma.DestroyAllocator(rctx.allocator)
 
-	queue_destroy(&renderer.graphics_queue)
+	queue_destroy(&rctx.graphics_queue)
 
-	descriptor_heap_destroy(&renderer.sampler_descriptor_heap)
-	descriptor_heap_destroy(&renderer.srv_descriptor_heap)
-	descriptor_heap_destroy(&renderer.dsv_descriptor_heap)
-	descriptor_heap_destroy(&renderer.rtv_descriptor_heap)
+	descriptor_heap_destroy(&rctx.sampler_descriptor_heap)
+	descriptor_heap_destroy(&rctx.srv_descriptor_heap)
+	descriptor_heap_destroy(&rctx.dsv_descriptor_heap)
+	descriptor_heap_destroy(&rctx.rtv_descriptor_heap)
 
 	for i in 0..<NUM_FRAMES_IN_FLIGHT {
-		descriptor_heap_destroy(&renderer.srv_descriptor_heaps[i])
+		descriptor_heap_destroy(&rctx.srv_descriptor_heaps[i])
 	}
 
-	renderer.device->Release()
-	renderer.device = nil
-	renderer.adapter->Release()
-	renderer.adapter = nil
-	renderer.factory->Release()
-	renderer.factory = nil
+	rctx.device->Release()
+	rctx.device = nil
+	rctx.adapter->Release()
+	rctx.adapter = nil
+	rctx.factory->Release()
+	rctx.factory = nil
 
 	when ODIN_DEBUG {
-		renderer.info_queue->Release()
-		renderer.info_queue = nil
-		renderer.debug->Release()
-		renderer.debug = nil
+		rctx.info_queue->Release()
+		rctx.info_queue = nil
+		rctx.debug->Release()
+		rctx.debug = nil
 
-		hr := renderer.debug_device->ReportLiveDeviceObjects({ .DETAIL, .SUMMARY, .IGNORE_INTERNAL })
+		hr := rctx.debug_device->ReportLiveDeviceObjects({ .DETAIL, .SUMMARY, .IGNORE_INTERNAL })
 		check_hr(hr, "Failed to Report Live Device Objects")
 
-		refcount := renderer.debug_device->Release()
-		renderer.debug_device = nil
+		refcount := rctx.debug_device->Release()
+		rctx.debug_device = nil
 		assert(refcount == 0, "D3D12 leak detected")
 	}
 }
 
-renderer_handle_resize :: proc(width: u32, height: u32) {
+handle_resize :: proc(width: u32, height: u32) {
 	wait_for_idle()
 
-	assert(renderer.swap_chain != nil, "Missing swap chain")
+	assert(rctx.swap_chain != nil, "Missing swap chain")
 
 	swap_chain_release_back_buffers()
-	renderer.swap_chain->ResizeBuffers(0, 0, 0, .UNKNOWN, {})
+	rctx.swap_chain->ResizeBuffers(0, 0, 0, .UNKNOWN, {})
 	swap_chain_create_back_buffers()
 }
 
-renderer_draw :: proc() {
+render :: proc() {
 }
 
 @(private)
 wait_for_idle :: proc() {
-	queue_wait_for_idle(&renderer.graphics_queue)
+	queue_wait_for_idle(&rctx.graphics_queue)
 }
 
 @(private)
@@ -279,7 +280,7 @@ descriptor_heap_create :: proc(descriptor_heap: ^Descriptor_Heap, type: d3d12.DE
 		desc.Flags = { .SHADER_VISIBLE }
 	}
 
-	hr := renderer.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, cast(^rawptr)&descriptor_heap.heap)
+	hr := rctx.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, cast(^rawptr)&descriptor_heap.heap)
 	check_hr(hr, "Failed to create descriptor heap")
 
 	when ODIN_DEBUG {
@@ -291,7 +292,7 @@ descriptor_heap_create :: proc(descriptor_heap: ^Descriptor_Heap, type: d3d12.DE
 		descriptor_heap.heap->GetGPUDescriptorHandleForHeapStart(&descriptor_heap.heap_start.gpu_handle)
 	}
 
-	descriptor_heap.descriptor_size = renderer.device->GetDescriptorHandleIncrementSize(type)
+	descriptor_heap.descriptor_size = rctx.device->GetDescriptorHandleIncrementSize(type)
 }
 
 @(private)
@@ -426,13 +427,13 @@ render_pass_descriptor_heap_get_reserved_descriptor :: proc(descriptor_heap: ^De
 
 @(private)
 swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
-	assert(renderer.factory != nil, "Factory not initialized")
-	assert(renderer.device != nil, "Device not initialized")
-	assert(renderer.graphics_queue.queue != nil, "Graphics command queue not initialized")
+	assert(rctx.factory != nil, "Factory not initialized")
+	assert(rctx.device != nil, "Device not initialized")
+	assert(rctx.graphics_queue.queue != nil, "Graphics command queue not initialized")
 	assert(window_handle != nil, "No native window handle provided")
 
-	renderer.swap_chain_width = width
-	renderer.swap_chain_height = height
+	rctx.swap_chain_width = width
+	rctx.swap_chain_height = height
 
 	desc := dxgi.SWAP_CHAIN_DESC1 {
 		Width = width,
@@ -447,63 +448,63 @@ swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 	}
 
 	swap_chain_1: ^dxgi.ISwapChain1
-	hr := renderer.factory->CreateSwapChainForHwnd(cast(^dxgi.IUnknown)renderer.graphics_queue.queue, window_handle, 
+	hr := rctx.factory->CreateSwapChainForHwnd(cast(^dxgi.IUnknown)rctx.graphics_queue.queue, window_handle, 
 														&desc, nil, nil, &swap_chain_1)
 	check_hr(hr, "Failed to create swap chain for window")
 	defer swap_chain_1->Release()
 
-	hr = renderer.factory->MakeWindowAssociation(window_handle, { .NO_ALT_ENTER })
+	hr = rctx.factory->MakeWindowAssociation(window_handle, { .NO_ALT_ENTER })
 	check_hr(hr, "Failed to make window association")
 
-	hr = swap_chain_1->QueryInterface(dxgi.ISwapChain4_UUID, cast(^rawptr)&renderer.swap_chain)
+	hr = swap_chain_1->QueryInterface(dxgi.ISwapChain4_UUID, cast(^rawptr)&rctx.swap_chain)
 	check_hr(hr, "Failed query swap chain 4")
 
 	swap_chain_create_back_buffers()
 
 	color_space: dxgi.COLOR_SPACE_TYPE = .RGB_FULL_G22_NONE_P709
 	color_space_support: dxgi.SWAP_CHAIN_COLOR_SPACE_SUPPORT
-	hr = renderer.swap_chain->CheckColorSpaceSupport(color_space, &color_space_support)
+	hr = rctx.swap_chain->CheckColorSpaceSupport(color_space, &color_space_support)
 	check_hr(hr, "Failed to check swap chain color space support")
 
 	if color_space_support == { .PRESENT } {
-		renderer.swap_chain->SetColorSpace1(color_space)
+		rctx.swap_chain->SetColorSpace1(color_space)
 	}
 }
 
 @(private)
 swap_chain_destroy :: proc() {
 	swap_chain_release_back_buffers()
-	if renderer.swap_chain != nil {
-		renderer.swap_chain->Release()
-		renderer.swap_chain = nil
+	if rctx.swap_chain != nil {
+		rctx.swap_chain->Release()
+		rctx.swap_chain = nil
 	}
 }
 
 @(private)
 swap_chain_create_back_buffers :: proc() {
-	if renderer.swap_chain != nil {
+	if rctx.swap_chain != nil {
 		for i in 0..<SWAP_CHAIN_BUFFER_COUNT {
 			back_buffer_resource: ^d3d12.IResource
-			rtv_handle := staging_descriptor_heap_get_new_descriptor(&renderer.rtv_descriptor_heap)
+			rtv_handle := staging_descriptor_heap_get_new_descriptor(&rctx.rtv_descriptor_heap)
 
 			rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC {
 				Format = .R8G8B8A8_UNORM_SRGB,
 				ViewDimension = .TEXTURE2D,
 			}
-			hr := renderer.swap_chain->GetBuffer(cast(u32)i, d3d12.IResource_UUID, cast(^rawptr)&renderer.back_buffer_resources[i])
+			hr := rctx.swap_chain->GetBuffer(cast(u32)i, d3d12.IResource_UUID, cast(^rawptr)&rctx.back_buffer_resources[i])
 			check_hr(hr, "Failed to get swap chain buffer")
-			renderer.back_buffer_rtvs[i] = rtv_handle
+			rctx.back_buffer_rtvs[i] = rtv_handle
 		}
 	}
 }
 
 @(private)
 swap_chain_release_back_buffers :: proc() {
-	if renderer.swap_chain != nil {
+	if rctx.swap_chain != nil {
 		for i in 0..<SWAP_CHAIN_BUFFER_COUNT {
-			staging_descriptor_heap_free_descriptor(&renderer.rtv_descriptor_heap, renderer.back_buffer_rtvs[i])
-			renderer.back_buffer_resources[i]->Release()
-			renderer.back_buffer_resources[i] = nil
+			staging_descriptor_heap_free_descriptor(&rctx.rtv_descriptor_heap, rctx.back_buffer_rtvs[i])
+			rctx.back_buffer_resources[i]->Release()
+			rctx.back_buffer_resources[i] = nil
 		}
 	}
 }
@@ -516,7 +517,7 @@ check_hr :: proc(res: d3d12.HRESULT, message: string) {
 
 	buf: [128]byte
 	error_message := fmt.bprintf(buf[:], "%v. Error code: %0x\n", message, u32(res))
-	log(error_message)
+	logger.log(error_message)
 	os.exit(-1)
 }
 

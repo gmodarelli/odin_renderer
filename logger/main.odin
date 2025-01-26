@@ -1,4 +1,4 @@
-package main
+package logger
 
 import "core:fmt"
 import windows "core:sys/windows"
