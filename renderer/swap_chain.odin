@@ -1,7 +1,11 @@
 package renderer
 
+import windows "core:sys/windows"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
+
+SWAP_CHAIN_FORMAT :: dxgi.FORMAT.R10G10B10A2_UNORM
+ALLOW_HDR :: true
 
 @(private="package")
 swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
@@ -16,18 +20,22 @@ swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 	desc := dxgi.SWAP_CHAIN_DESC1 {
 		Width = width,
 		Height = height,
-		Format = .R8G8B8A8_UNORM,
+		Format = SWAP_CHAIN_FORMAT,
 		SampleDesc = { Count = 1 },
 		BufferUsage = { .RENDER_TARGET_OUTPUT },
 		BufferCount = SWAP_CHAIN_BUFFER_COUNT,
 		Scaling = .STRETCH,
 		SwapEffect = .FLIP_DISCARD,
-		AlphaMode = .UNSPECIFIED,
+		AlphaMode = .IGNORE,
+	}
+
+	fullscreen_desc := dxgi.SWAP_CHAIN_FULLSCREEN_DESC {
+		Windowed = true,
 	}
 
 	swap_chain_1: ^dxgi.ISwapChain1
 	hr := rctx.factory->CreateSwapChainForHwnd(cast(^dxgi.IUnknown)rctx.graphics_queue.queue, window_handle, 
-														&desc, nil, nil, &swap_chain_1)
+														&desc, &fullscreen_desc, nil, &swap_chain_1)
 	check_hr(hr, "Failed to create swap chain for window")
 	defer swap_chain_1->Release()
 
@@ -39,7 +47,12 @@ swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 
 	swap_chain_create_back_buffers()
 
-	color_space: dxgi.COLOR_SPACE_TYPE = .RGB_FULL_G22_NONE_P709
+	color_space: dxgi.COLOR_SPACE_TYPE 
+	if ALLOW_HDR && supports_hdr() {
+		color_space = .RGB_FULL_G22_NONE_P709
+	} else {
+		color_space = .RGB_FULL_G2084_NONE_P2020
+	}
 	color_space_support: dxgi.SWAP_CHAIN_COLOR_SPACE_SUPPORT
 	hr = rctx.swap_chain->CheckColorSpaceSupport(color_space, &color_space_support)
 	check_hr(hr, "Failed to check swap chain color space support")
@@ -66,7 +79,7 @@ swap_chain_create_back_buffers :: proc() {
 			rtv_handle := staging_descriptor_heap_get_new_descriptor(&rctx.rtv_descriptor_heap)
 
 			rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC {
-				Format = .R8G8B8A8_UNORM_SRGB,
+				Format = SWAP_CHAIN_FORMAT,
 				ViewDimension = .TEXTURE2D,
 			}
 			hr := rctx.swap_chain->GetBuffer(cast(u32)i, d3d12.IResource_UUID, cast(^rawptr)&rctx.back_buffer_resources[i])
@@ -85,4 +98,28 @@ swap_chain_release_back_buffers :: proc() {
 			rctx.back_buffer_resources[i] = nil
 		}
 	}
+}
+
+@(private="file")
+supports_hdr :: proc() -> bool {
+	assert(rctx.swap_chain != nil, "Swap chain is not initialized")
+
+	dxgi_output: ^dxgi.IOutput
+	if windows.SUCCEEDED(rctx.swap_chain->GetContainingOutput(&dxgi_output)) {
+		defer dxgi_output->Release()
+
+		dxgi_output6: ^dxgi.IOutput6
+		if windows.SUCCEEDED(dxgi_output->QueryInterface(dxgi.IOutput6_UUID, cast(^rawptr)&dxgi_output6)) {
+			defer dxgi_output6->Release()
+
+			desc: dxgi.OUTPUT_DESC1
+			if windows.SUCCEEDED(dxgi_output6->GetDesc1(&desc)) {
+				if desc.ColorSpace == .RGB_FULL_G2084_NONE_P2020 {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
