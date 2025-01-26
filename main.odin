@@ -59,9 +59,36 @@ main :: proc() {
 				case .ESCAPE:
 					break loop
 				}
+			case .WINDOWEVENT:
+				#partial switch event.window.event {
+				case .RESIZED:
+					new_width := cast(u32)event.window.data1
+					new_height := cast(u32)event.window.data2
+
+					buf: [128]byte
+					message := fmt.bprintf(buf[:], "Window resized: %vx%v", new_width, new_height)
+					log(message)
+
+					if new_width > 0 && new_height > 0 {
+						renderer_handle_resize(new_width, new_height)
+					}
+					break
+				case .MAXIMIZED:
+					log("Window maximized")
+					break
+				case .MINIMIZED:
+					log("Window minimized")
+					break
+				case .RESTORED:
+					log("Window restored")
+					break
+				}
+				break
 			case .QUIT:
 				break loop
 			}
 		}
+
+		// Render here
 	}
 }

@@ -245,6 +245,14 @@ renderer_destroy :: proc() {
 	}
 }
 
+renderer_handle_resize :: proc(width: u32, height: u32) {
+	assert(renderer.swap_chain != nil, "Missing swap chain")
+
+	swap_chain_release_back_buffers()
+	renderer.swap_chain->ResizeBuffers(0, 0, 0, .UNKNOWN, {})
+	swap_chain_create_back_buffers()
+}
+
 @(private)
 command_queue_create :: proc(queue: ^^d3d12.ICommandQueue, type: d3d12.COMMAND_LIST_TYPE, debug_name: string) {
 	desc := d3d12.COMMAND_QUEUE_DESC{
@@ -462,18 +470,7 @@ swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 	hr = swap_chain_1->QueryInterface(dxgi.ISwapChain4_UUID, cast(^rawptr)&renderer.swap_chain)
 	check_hr(hr, "Failed query swap chain 4")
 
-	for i in 0..<SWAP_CHAIN_BUFFER_COUNT {
-		back_buffer_resource: ^d3d12.IResource
-		rtv_handle := staging_descriptor_heap_get_new_descriptor(&renderer.rtv_descriptor_heap)
-
-		rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC {
-			Format = .R8G8B8A8_UNORM_SRGB,
-			ViewDimension = .TEXTURE2D,
-		}
-		hr := renderer.swap_chain->GetBuffer(cast(u32)i, d3d12.IResource_UUID, cast(^rawptr)&renderer.back_buffer_resources[i])
-		check_hr(hr, "Failed to get swap chain buffer")
-		renderer.back_buffer_rtvs[i] = rtv_handle
-	}
+	swap_chain_create_back_buffers()
 
 	color_space: dxgi.COLOR_SPACE_TYPE = .RGB_FULL_G22_NONE_P709
 	color_space_support: dxgi.SWAP_CHAIN_COLOR_SPACE_SUPPORT
@@ -487,15 +484,39 @@ swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 
 @(private)
 swap_chain_destroy :: proc() {
+	swap_chain_release_back_buffers()
+	if renderer.swap_chain != nil {
+		renderer.swap_chain->Release()
+		renderer.swap_chain = nil
+	}
+}
+
+@(private)
+swap_chain_create_back_buffers :: proc() {
+	if renderer.swap_chain != nil {
+		for i in 0..<SWAP_CHAIN_BUFFER_COUNT {
+			back_buffer_resource: ^d3d12.IResource
+			rtv_handle := staging_descriptor_heap_get_new_descriptor(&renderer.rtv_descriptor_heap)
+
+			rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC {
+				Format = .R8G8B8A8_UNORM_SRGB,
+				ViewDimension = .TEXTURE2D,
+			}
+			hr := renderer.swap_chain->GetBuffer(cast(u32)i, d3d12.IResource_UUID, cast(^rawptr)&renderer.back_buffer_resources[i])
+			check_hr(hr, "Failed to get swap chain buffer")
+			renderer.back_buffer_rtvs[i] = rtv_handle
+		}
+	}
+}
+
+@(private)
+swap_chain_release_back_buffers :: proc() {
 	if renderer.swap_chain != nil {
 		for i in 0..<SWAP_CHAIN_BUFFER_COUNT {
 			staging_descriptor_heap_free_descriptor(&renderer.rtv_descriptor_heap, renderer.back_buffer_rtvs[i])
 			renderer.back_buffer_resources[i]->Release()
 			renderer.back_buffer_resources[i] = nil
 		}
-
-		renderer.swap_chain->Release()
-		renderer.swap_chain = nil
 	}
 }
 
