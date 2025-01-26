@@ -6,6 +6,7 @@ import windows "core:sys/windows"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
 
+@(private="package")
 Queue :: struct {
 	type: d3d12.COMMAND_LIST_TYPE,
 	queue: ^d3d12.ICommandQueue,
@@ -17,6 +18,7 @@ Queue :: struct {
 	event_mutex: sync.Mutex,
 }
 
+@(private="package")
 queue_create :: proc(queue: ^Queue, type: d3d12.COMMAND_LIST_TYPE, debug_name: string) {
 	queue.next_fence_value = 1
 	queue.type = type
@@ -38,6 +40,7 @@ queue_create :: proc(queue: ^Queue, type: d3d12.COMMAND_LIST_TYPE, debug_name: s
 	assert(queue.fence_event_handle != windows.INVALID_HANDLE_VALUE, "Failed to create event handle")
 }
 
+@(private="package")
 queue_destroy :: proc(queue: ^Queue) {
 	windows.CloseHandle(queue.fence_event_handle)
 
@@ -52,10 +55,12 @@ queue_destroy :: proc(queue: ^Queue) {
 	}
 }
 
+@(private="package")
 queue_wait_for_idle :: proc(queue: ^Queue) {
 	queue_wait_for_fence_cpu_blocking(queue, queue.next_fence_value - 1)
 }
 
+@(private="package")
 queue_wait_for_fence_cpu_blocking :: proc(queue: ^Queue, fence_value: u64) {
 	if is_fence_complete(queue, fence_value) { return }
 
@@ -66,6 +71,7 @@ queue_wait_for_fence_cpu_blocking :: proc(queue: ^Queue, fence_value: u64) {
 	}
 }
 
+@(private="package")
 queue_execute_command_list :: proc(queue: ^Queue, cmd: ^d3d12.ICommandList) -> u64 {
 	hr := (cast(^d3d12.IGraphicsCommandList)cmd)->Close()
 	check_hr(hr, "Failed to close command list")
@@ -76,6 +82,7 @@ queue_execute_command_list :: proc(queue: ^Queue, cmd: ^d3d12.ICommandList) -> u
 	return queue_signal_fence(queue)
 }
 
+@(private="package")
 queue_signal_fence :: proc(queue: ^Queue) -> u64 {
 	fence_value: u64 = 0
 	if sync.mutex_guard(&queue.fence_mutex) {
@@ -87,22 +94,22 @@ queue_signal_fence :: proc(queue: ^Queue) -> u64 {
 	return fence_value
 }
 
-@(private)
+@(private="file")
 insert_wait :: proc(queue: ^Queue, fence_value: u64) {
 	queue.queue->Wait(queue.fence, fence_value)
 }
 
-@(private)
+@(private="file")
 insert_wait_for_queue_fence :: proc(queue: ^Queue, other_queue: ^Queue, fence_value: u64) {
 	queue.queue->Wait(other_queue.fence, fence_value)
 }
 
-@(private)
+@(private="file")
 insert_wait_for_queue :: proc(queue: ^Queue, other_queue: ^Queue) {
 	queue.queue->Wait(other_queue.fence, other_queue.next_fence_value)
 }
 
-@(private)
+@(private="file")
 is_fence_complete :: proc(queue: ^Queue, fence_value: u64) -> bool {
 	if fence_value > queue.last_completed_fence_value {
 		poll_current_fence_value(queue)
@@ -111,7 +118,7 @@ is_fence_complete :: proc(queue: ^Queue, fence_value: u64) -> bool {
 	return fence_value <= queue.last_completed_fence_value
 }
 
-@(private)
+@(private="file")
 poll_current_fence_value :: proc(queue: ^Queue) -> u64 {
 	completed_value := queue.fence->GetCompletedValue()
 	if queue.last_completed_fence_value < completed_value {
