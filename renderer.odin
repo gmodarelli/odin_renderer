@@ -43,8 +43,9 @@ Renderer :: struct {
 	free_reserved_descriptor_indices: [NUM_RESERVED_SRV_DESCRIPTORS]u32,
 	free_reserved_descriptor_indices_cursor: u32,
 
-	// back_buffer_resources: [SWAP_CHAIN_BUFFER_COUNT]^d3d12.IResource,
-	// back_buffer_rtvs: [SWAP_CHAIN_BUFFER_COUNT]
+	// TODO: Convert these to a custom Resource struct
+	back_buffer_resources: [SWAP_CHAIN_BUFFER_COUNT]^d3d12.IResource,
+	back_buffer_rtvs: [SWAP_CHAIN_BUFFER_COUNT]Descriptor,
 
 	// NOTE: These are debug-only
 	debug: ^d3d12.IDebug5,
@@ -76,7 +77,7 @@ Descriptor_Heap_Staging :: struct {
 	free_descriptors: []u32,
 	num_free_descriptors: u32,
 	current_descriptor_index: u32,
-	num_active_handle: u32,
+	num_active_handles: u32,
 }
 
 @(private)
@@ -303,9 +304,51 @@ staging_descriptor_heap_create :: proc(descriptor_heap: ^Descriptor_Heap, type: 
 
 	descriptor_heap.variant = Descriptor_Heap_Staging {
 		free_descriptors = make([]u32, descriptor_heap.max_descriptors),
-		num_free_descriptors = descriptor_heap.max_descriptors,
+		num_free_descriptors = 0,
 		current_descriptor_index = 0,
-		num_active_handle = 0,
+		num_active_handles = 0,
+	}
+}
+
+@(private)
+staging_descriptor_heap_get_new_descriptor :: proc(descriptor_heap: ^Descriptor_Heap) -> Descriptor {
+	descriptor: Descriptor
+
+	if sync.mutex_guard(&descriptor_heap.usage_mutex) {
+		staging_heap := cast(^Descriptor_Heap_Staging)&descriptor_heap.variant
+
+		heap_index: u32 = 0
+		if staging_heap.current_descriptor_index < descriptor_heap.max_descriptors {
+			heap_index = staging_heap.current_descriptor_index
+			staging_heap.current_descriptor_index += 1
+		} else if staging_heap.num_free_descriptors > 0 {
+			staging_heap.num_free_descriptors -= 1
+			heap_index = staging_heap.free_descriptors[staging_heap.num_free_descriptors]
+		} else {
+			assert(false, "Ran out of dynamic descriptor heap handles, need to increase heap size")
+		}
+			
+		cpu_handle := descriptor_heap.heap_start.cpu_handle
+		cpu_handle.ptr += cast(uint)(heap_index * descriptor_heap.descriptor_size)
+
+		staging_heap.num_active_handles += 1
+
+		descriptor.cpu_handle = cpu_handle
+		descriptor.heap_index = heap_index
+	}
+
+	return descriptor
+}
+
+@(private)
+staging_descriptor_heap_free_descriptor :: proc(descriptor_heap: ^Descriptor_Heap, descriptor: Descriptor) {
+	if sync.mutex_guard(&descriptor_heap.usage_mutex) {
+		staging_heap := cast(^Descriptor_Heap_Staging)&descriptor_heap.variant
+		staging_heap.free_descriptors[staging_heap.num_free_descriptors] = descriptor.heap_index
+		staging_heap.num_free_descriptors += 1
+
+		assert(staging_heap.num_active_handles > 0, "Freeing heap handles when there should be none left")
+		staging_heap.num_active_handles -= 1
 	}
 }
 
@@ -315,7 +358,7 @@ descriptor_heap_destroy :: proc(descriptor_heap: ^Descriptor_Heap) {
 		case Descriptor_Heap_Staging:
 			descriptor_heap.heap->Release()
 			delete(v.free_descriptors)
-			assert(v.num_active_handle == 0, "There were active handles when the heap was destroyed")
+			assert(v.num_active_handles == 0, "There were active handles when the heap was destroyed")
 			break
 		case Descriptor_Heap_Render_Pass:
 			descriptor_heap.heap->Release()
@@ -336,6 +379,53 @@ render_pass_descriptor_heap_create :: proc(descriptor_heap: ^Descriptor_Heap, ty
 @(private)
 render_pass_descriptor_heap_destroy :: proc(descriptor_heap: ^Descriptor_Heap) {
 	descriptor_heap.heap->Release()
+}
+
+@(private)
+render_pass_descriptor_heap_reset :: proc(descriptor_heap: ^Descriptor_Heap) {
+	render_pass_heap := cast(^Descriptor_Heap_Render_Pass)&descriptor_heap.variant
+	render_pass_heap.current_descriptor_index = render_pass_heap.num_reserved_handles
+}
+
+@(private)
+render_pass_descriptor_heap_allocate_block :: proc(descriptor_heap: ^Descriptor_Heap, count: u32) -> Descriptor {
+	heap_index: u32 = 0
+
+	if sync.mutex_guard(&descriptor_heap.usage_mutex) {
+		render_pass_heap := cast(^Descriptor_Heap_Render_Pass)&descriptor_heap.variant
+		block_end := render_pass_heap.current_descriptor_index + count
+		assert(block_end < descriptor_heap.max_descriptors, "Ran out of descriptor heap handles, need to increase heap size")
+		heap_index = render_pass_heap.current_descriptor_index
+		render_pass_heap.current_descriptor_index = block_end
+	}
+
+	cpu_handle := descriptor_heap.heap_start.cpu_handle
+	cpu_handle.ptr += cast(uint)(heap_index * descriptor_heap.descriptor_size)
+	gpu_handle := descriptor_heap.heap_start.gpu_handle
+	gpu_handle.ptr += cast(u64)(heap_index * descriptor_heap.descriptor_size)
+
+	return {
+		cpu_handle = cpu_handle,
+		gpu_handle = gpu_handle,
+		heap_index = heap_index,
+	}
+}
+
+@(private)
+render_pass_descriptor_heap_get_reserved_descriptor :: proc(descriptor_heap: ^Descriptor_Heap, index: u32) -> Descriptor {
+	render_pass_heap := cast(^Descriptor_Heap_Render_Pass)&descriptor_heap.variant
+	assert(index < render_pass_heap.num_reserved_handles, "Ran out of reserved descriptor heap handles, need to increase heap size")
+
+	cpu_handle := descriptor_heap.heap_start.cpu_handle
+	cpu_handle.ptr += cast(uint)(index * descriptor_heap.descriptor_size)
+	gpu_handle := descriptor_heap.heap_start.gpu_handle
+	gpu_handle.ptr += cast(u64)(index * descriptor_heap.descriptor_size)
+
+	return {
+		cpu_handle = cpu_handle,
+		gpu_handle = gpu_handle,
+		heap_index = index,
+	}
 }
 
 @(private)
@@ -372,12 +462,38 @@ swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 	hr = swap_chain_1->QueryInterface(dxgi.ISwapChain4_UUID, cast(^rawptr)&renderer.swap_chain)
 	check_hr(hr, "Failed query swap chain 4")
 
-	// TODO: Create render targets
+	for i in 0..<SWAP_CHAIN_BUFFER_COUNT {
+		back_buffer_resource: ^d3d12.IResource
+		rtv_handle := staging_descriptor_heap_get_new_descriptor(&renderer.rtv_descriptor_heap)
+
+		rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC {
+			Format = .R8G8B8A8_UNORM_SRGB,
+			ViewDimension = .TEXTURE2D,
+		}
+		hr := renderer.swap_chain->GetBuffer(cast(u32)i, d3d12.IResource_UUID, cast(^rawptr)&renderer.back_buffer_resources[i])
+		check_hr(hr, "Failed to get swap chain buffer")
+		renderer.back_buffer_rtvs[i] = rtv_handle
+	}
+
+	color_space: dxgi.COLOR_SPACE_TYPE = .RGB_FULL_G22_NONE_P709
+	color_space_support: dxgi.SWAP_CHAIN_COLOR_SPACE_SUPPORT
+	hr = renderer.swap_chain->CheckColorSpaceSupport(color_space, &color_space_support)
+	check_hr(hr, "Failed to check swap chain color space support")
+
+	if color_space_support == { .PRESENT } {
+		renderer.swap_chain->SetColorSpace1(color_space)
+	}
 }
 
 @(private)
 swap_chain_destroy :: proc() {
 	if renderer.swap_chain != nil {
+		for i in 0..<SWAP_CHAIN_BUFFER_COUNT {
+			staging_descriptor_heap_free_descriptor(&renderer.rtv_descriptor_heap, renderer.back_buffer_rtvs[i])
+			renderer.back_buffer_resources[i]->Release()
+			renderer.back_buffer_resources[i] = nil
+		}
+
 		renderer.swap_chain->Release()
 		renderer.swap_chain = nil
 	}
