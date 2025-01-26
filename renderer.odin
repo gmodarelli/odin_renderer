@@ -27,7 +27,7 @@ Renderer :: struct {
 	allocator: rawptr,
 
 	// Graphics Command Queue
-	graphics_queue: ^d3d12.ICommandQueue,
+	graphics_queue: Queue,
 
 	// SwapChain data
 	swap_chain: ^dxgi.ISwapChain4,
@@ -92,7 +92,6 @@ Descriptor_Heap_Variant :: union {
 	Descriptor_Heap_Render_Pass,
 }
 
-@(private)
 renderer: Renderer
 
 renderer_create :: proc(window_handle: rawptr, width: u32, height: u32) {
@@ -151,7 +150,7 @@ renderer_create :: proc(window_handle: rawptr, width: u32, height: u32) {
 		check_hr(hr, "Failed to create allocator")
 	}
 
-	command_queue_create(&renderer.graphics_queue, .DIRECT, "Graphics Queue")
+	queue_create(&renderer.graphics_queue, .DIRECT, "Graphics Queue")
 
 	staging_descriptor_heap_create(&renderer.rtv_descriptor_heap, .RTV,
 									NUM_RTV_STAGING_DESCRIPTORS, false, "RTV Descriptor Heap")
@@ -208,11 +207,13 @@ renderer_create :: proc(window_handle: rawptr, width: u32, height: u32) {
 }
 
 renderer_destroy :: proc() {
+	wait_for_idle()
+
 	swap_chain_destroy()
 
 	d3d12ma.DestroyAllocator(renderer.allocator)
 
-	command_queue_destroy(renderer.graphics_queue)
+	queue_destroy(&renderer.graphics_queue)
 
 	descriptor_heap_destroy(&renderer.sampler_descriptor_heap)
 	descriptor_heap_destroy(&renderer.srv_descriptor_heap)
@@ -246,6 +247,8 @@ renderer_destroy :: proc() {
 }
 
 renderer_handle_resize :: proc(width: u32, height: u32) {
+	wait_for_idle()
+
 	assert(renderer.swap_chain != nil, "Missing swap chain")
 
 	swap_chain_release_back_buffers()
@@ -253,27 +256,12 @@ renderer_handle_resize :: proc(width: u32, height: u32) {
 	swap_chain_create_back_buffers()
 }
 
-@(private)
-command_queue_create :: proc(queue: ^^d3d12.ICommandQueue, type: d3d12.COMMAND_LIST_TYPE, debug_name: string) {
-	desc := d3d12.COMMAND_QUEUE_DESC{
-		Type = type,
-	}
-
-	hr := renderer.device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, cast(^rawptr)queue);
-	check_hr(hr, "Failed to create command queue")
-
-	when ODIN_DEBUG {
-		queue^->SetName(windows.utf8_to_wstring(debug_name))
-	}
-
-	// TODO: Create fence
+renderer_draw :: proc() {
 }
 
 @(private)
-command_queue_destroy :: proc(queue: ^d3d12.ICommandQueue) {
-	if queue != nil {
-		queue->Release()
-	}
+wait_for_idle :: proc() {
+	queue_wait_for_idle(&renderer.graphics_queue)
 }
 
 @(private)
@@ -440,7 +428,7 @@ render_pass_descriptor_heap_get_reserved_descriptor :: proc(descriptor_heap: ^De
 swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 	assert(renderer.factory != nil, "Factory not initialized")
 	assert(renderer.device != nil, "Device not initialized")
-	assert(renderer.graphics_queue != nil, "Graphics command queue not initialized")
+	assert(renderer.graphics_queue.queue != nil, "Graphics command queue not initialized")
 	assert(window_handle != nil, "No native window handle provided")
 
 	renderer.swap_chain_width = width
@@ -459,7 +447,7 @@ swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 	}
 
 	swap_chain_1: ^dxgi.ISwapChain1
-	hr := renderer.factory->CreateSwapChainForHwnd(cast(^dxgi.IUnknown)renderer.graphics_queue, window_handle, 
+	hr := renderer.factory->CreateSwapChainForHwnd(cast(^dxgi.IUnknown)renderer.graphics_queue.queue, window_handle, 
 														&desc, nil, nil, &swap_chain_1)
 	check_hr(hr, "Failed to create swap chain for window")
 	defer swap_chain_1->Release()

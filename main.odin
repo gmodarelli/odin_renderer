@@ -42,6 +42,7 @@ main :: proc() {
 		return
 	}
 	defer sdl.DestroyWindow(sdl_window)
+	is_window_minimized := false
 
 	window_info: sdl.SysWMinfo
 	sdl.GetWindowWMInfo(sdl_window, &window_info)
@@ -73,14 +74,13 @@ main :: proc() {
 						renderer_handle_resize(new_width, new_height)
 					}
 					break
-				case .MAXIMIZED:
-					log("Window maximized")
-					break
 				case .MINIMIZED:
 					log("Window minimized")
+					is_window_minimized = true
 					break
 				case .RESTORED:
 					log("Window restored")
+					is_window_minimized = false
 					break
 				}
 				break
@@ -89,6 +89,8 @@ main :: proc() {
 			}
 		}
 
-		// Render here
+		if !is_window_minimized {
+			renderer_draw()
+		}
 	}
 }
