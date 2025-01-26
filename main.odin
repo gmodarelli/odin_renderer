@@ -1,9 +1,35 @@
 package main
 
 import "core:fmt"
+import "core:mem"
 import sdl "vendor:sdl2"
 
 main :: proc() {
+	when ODIN_DEBUG {
+		track: mem.Tracking_Allocator
+		mem.tracking_allocator_init(&track, context.allocator)
+		context.allocator = mem.tracking_allocator(&track)
+
+		defer {
+			if len(track.allocation_map) > 0 {
+				for _, entry in track.allocation_map {
+					buf: [128]byte
+					message := fmt.bprintf(buf[:], "%v leaked %v bytes\n", entry.location, entry.size)
+					log(message)
+				}
+			}
+
+			if len(track.bad_free_array) > 0 {
+				for entry in track.bad_free_array {
+					buf: [128]byte
+					message := fmt.bprintf(buf[:], "%v bad free at %v\n", entry.location, entry.memory)
+					log(message)
+				}
+			}
+			mem.tracking_allocator_destroy(&track)
+		}
+	}
+
 	if sdl.Init(sdl.INIT_VIDEO) < 0 {
 		log("Failed to initialize SDL")
 		return
@@ -21,9 +47,8 @@ main :: proc() {
 	sdl.GetWindowWMInfo(sdl_window, &window_info)
 	window_handle := window_info.info.win.window
 
-	renderer_ctx: Renderer_Context
-	initialize_renderer(&renderer_ctx, window_handle, 1920, 1080)
-	defer destroy_renderer(&renderer_ctx)
+	initialize_renderer(window_handle, 1920, 1080)
+	defer destroy_renderer()
 
 	loop: for {
 		event: sdl.Event
