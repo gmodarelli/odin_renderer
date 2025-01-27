@@ -139,36 +139,6 @@ create :: proc(window_handle: rawptr, width: u32, height: u32) {
 	}
 
 	command_create(&rctx.graphics_command, .DIRECT, "Graphics Command")
-
-	/*
-	// Testing resource allocation
-	{
-		resource_desc := d3d12.RESOURCE_DESC {
-			Dimension = .BUFFER,
-			Width = 256,
-			Height = 1,
-			DepthOrArraySize = 1,
-			MipLevels = 1,
-			Format = .UNKNOWN,
-			SampleDesc = { Count = 1, Quality = 0 },
-			Layout = .ROW_MAJOR,
-		}
-		resource: ^d3d12.IResource1
-		allocation_desc := d3d12ma.ALLOCATION_DESC {
-			HeapType = .DEFAULT,
-		}
-		resource_allocation: rawptr
-		hr := d3d12ma.CreateResource(rctx.allocator, &allocation_desc, &resource_desc, { .COPY_DEST }, nil, &resource_allocation,
-									d3d12.IResource1_UUID, cast(^rawptr)&resource)
-		check_hr(hr, "Failed to create resource")
-		defer {
-			if resource != nil {
-				resource->Release()
-				(cast(^windows.IUnknown)resource_allocation)->Release()
-			}
-		}
-	}
-	*/
 }
 
 destroy :: proc() {
