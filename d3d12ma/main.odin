@@ -29,11 +29,16 @@ CreateResource :: proc(pSelf: rawptr, pAllocDesc: ^ALLOCATION_DESC, pResourceDes
 	return D3D12MAAllocator_CreateResource(pSelf, pAllocDesc, pResourceDesc, InitialResourceState, pOptimizedClearValue, ppAllocation, riidResource, ppvResource)
 }
 
+SetCurrentFrameIndex :: proc(pSelf: rawptr, frame_index: uint) {
+	D3D12MAAllocator_SetCurrentFrameIndex(pSelf, frame_index)
+}
+
 @(private)
 @(default_calling_convention="c")
 foreign d3d12ma_c {
 	D3D12MACreateAllocator :: proc(pDesc: ^ALLOCATOR_DESC, ppAllocator: ^rawptr) -> windows.HRESULT ---
 	D3D12MAAllocator_CreateResource :: proc(pSelf: rawptr, pAllocDesc: ^ALLOCATION_DESC, pResourceDesc: ^d3d12.RESOURCE_DESC, InitialResourceState: d3d12.RESOURCE_STATES, pOptimizedClearValue: ^d3d12.CLEAR_VALUE, ppAllocation: ^rawptr, riidResource: ^windows.GUID, ppvResource: ^rawptr) -> windows.HRESULT ---
+	D3D12MAAllocator_SetCurrentFrameIndex :: proc(pSelf: rawptr, frame_index: uint) ---
 }
 
 AllocateFunctionType :: proc"c"(size: u64, alignment: u64, pPrivateData: rawptr) -> rawptr

@@ -75,16 +75,18 @@ swap_chain_destroy :: proc() {
 swap_chain_create_back_buffers :: proc() {
 	if rctx.swap_chain != nil {
 		for i in 0..<SWAP_CHAIN_BUFFER_COUNT {
-			back_buffer_resource: ^d3d12.IResource
-			rtv_handle := staging_descriptor_heap_get_new_descriptor(&rctx.rtv_descriptor_heap)
+			back_buffer_texture := cast(^Resource_Texture)(&rctx.back_buffers[i].variant)
+			back_buffer_texture.rtv_descriptor = staging_descriptor_heap_get_new_descriptor(&rctx.rtv_descriptor_heap)
 
 			rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC {
 				Format = SWAP_CHAIN_FORMAT,
 				ViewDimension = .TEXTURE2D,
 			}
-			hr := rctx.swap_chain->GetBuffer(cast(u32)i, d3d12.IResource_UUID, cast(^rawptr)&rctx.back_buffer_resources[i])
+			hr := rctx.swap_chain->GetBuffer(cast(u32)i, d3d12.IResource_UUID, cast(^rawptr)&rctx.back_buffers[i].resource)
 			check_hr(hr, "Failed to get swap chain buffer")
-			rctx.back_buffer_rtvs[i] = rtv_handle
+			rctx.device->CreateRenderTargetView(rctx.back_buffers[i].resource, &rtv_desc, back_buffer_texture.rtv_descriptor.cpu_handle)
+
+			rctx.back_buffers[i].state = d3d12.RESOURCE_STATE_PRESENT
 		}
 	}
 }
@@ -93,9 +95,10 @@ swap_chain_create_back_buffers :: proc() {
 swap_chain_release_back_buffers :: proc() {
 	if rctx.swap_chain != nil {
 		for i in 0..<SWAP_CHAIN_BUFFER_COUNT {
-			staging_descriptor_heap_free_descriptor(&rctx.rtv_descriptor_heap, rctx.back_buffer_rtvs[i])
-			rctx.back_buffer_resources[i]->Release()
-			rctx.back_buffer_resources[i] = nil
+			back_buffer_texture := cast(^Resource_Texture)(&rctx.back_buffers[i].variant)
+			staging_descriptor_heap_free_descriptor(&rctx.rtv_descriptor_heap, back_buffer_texture.rtv_descriptor)
+			rctx.back_buffers[i].resource->Release()
+			rctx.back_buffers[i].resource = nil
 		}
 	}
 }

@@ -16,6 +16,8 @@ NUM_SRV_STAGING_DESCRIPTORS :: 2048
 NUM_SAMPLER_DESCRIPTORS :: 6
 NUM_RESERVED_SRV_DESCRIPTORS :: 8192
 NUM_SRV_RENDER_PASS_USER_DESCRIPTORS :: 65536
+MAX_QUEUED_BARRIERS :: 16
+MAX_COMMAND_SUBMISSIONS_PER_FRAME :: 256
 
 @(private)
 Renderer :: struct {
@@ -42,14 +44,24 @@ Renderer :: struct {
 	free_reserved_descriptor_indices: [NUM_RESERVED_SRV_DESCRIPTORS]u32,
 	free_reserved_descriptor_indices_cursor: u32,
 
-	// TODO: Convert these to a custom Resource struct
-	back_buffer_resources: [SWAP_CHAIN_BUFFER_COUNT]^d3d12.IResource,
-	back_buffer_rtvs: [SWAP_CHAIN_BUFFER_COUNT]Descriptor,
+	back_buffers: [SWAP_CHAIN_BUFFER_COUNT]Resource,
+
+	frame_index: u32,
+	end_of_frame_fences: [NUM_FRAMES_IN_FLIGHT]End_Of_Frame_Fences,
+
+	graphics_command: Command,
+	command_submissions: [NUM_FRAMES_IN_FLIGHT][]Command_Submission,
+	num_command_submissions: [NUM_FRAMES_IN_FLIGHT]u32,
 
 	// NOTE: These are debug-only
 	debug: ^d3d12.IDebug5,
 	debug_device: ^d3d12.IDebugDevice1,
 	info_queue: ^d3d12.IInfoQueue,
+}
+
+@(private)
+End_Of_Frame_Fences :: struct {
+	graphics_queue_fence_value: u64,
 }
 
 rctx: Renderer
@@ -121,6 +133,13 @@ create :: proc(window_handle: rawptr, width: u32, height: u32) {
 
 	swap_chain_create(cast(dxgi.HWND)window_handle, width, height)
 
+	for i in 0..<NUM_FRAMES_IN_FLIGHT {
+		rctx.command_submissions[i] = make([]Command_Submission, MAX_COMMAND_SUBMISSIONS_PER_FRAME)
+		rctx.num_command_submissions[i] = 0
+	}
+
+	command_create(&rctx.graphics_command, .DIRECT, "Graphics Command")
+
 	/*
 	// Testing resource allocation
 	{
@@ -154,6 +173,13 @@ create :: proc(window_handle: rawptr, width: u32, height: u32) {
 
 destroy :: proc() {
 	wait_for_idle()
+
+	for i in 0..<NUM_FRAMES_IN_FLIGHT {
+		delete(rctx.command_submissions[i])
+		rctx.num_command_submissions[i] = 0
+	}
+
+	command_destroy(&rctx.graphics_command)
 
 	swap_chain_destroy()
 
@@ -203,13 +229,86 @@ handle_resize :: proc(width: u32, height: u32) {
 }
 
 render :: proc() {
+	begin_frame()
+	frame_index := rctx.frame_index
+	swap_chain_back_buffer_index := rctx.swap_chain->GetCurrentBackBufferIndex()
+	back_buffer := &rctx.back_buffers[swap_chain_back_buffer_index]
+
+	command_reset(&rctx.graphics_command)
+	command_add_barrier(&rctx.graphics_command, back_buffer, { .RENDER_TARGET })
+	command_flush_barriers(&rctx.graphics_command)
+
+	command_bind_render_targets(&rctx.graphics_command, { back_buffer }, nil)
+	command_set_default_viewport_and_scissor(&rctx.graphics_command, rctx.swap_chain_width, rctx.swap_chain_height)
+
+	clear_color := [4]f32{ 0.3, 0.3, 0.3, 1.0 }
+	command_clear_render_target(&rctx.graphics_command, back_buffer, &clear_color)
+
+	command_add_barrier(&rctx.graphics_command, back_buffer, d3d12.RESOURCE_STATE_PRESENT)
+	command_flush_barriers(&rctx.graphics_command)
+
+	submit_work(&rctx.graphics_command)
+	end_frame()
+	present()
+}
+
+@(private)
+begin_frame :: proc() {
+	rctx.frame_index = (rctx.frame_index + 1) % NUM_FRAMES_IN_FLIGHT
+	d3d12ma.SetCurrentFrameIndex(rctx.allocator, cast(uint)rctx.frame_index)
+
+	// Wait on fences from 2 frames ago
+	queue_wait_for_fence_cpu_blocking(&rctx.graphics_queue, rctx.end_of_frame_fences[rctx.frame_index].graphics_queue_fence_value)
+
+	rctx.num_command_submissions[rctx.frame_index] = 0
+}
+
+@(private)
+end_frame :: proc() {
+}
+
+@(private)
+present :: proc() {
+	// TODO: Figure out the best way to present here, and make it work with VSync
+	flags: dxgi.PRESENT
+	params: dxgi.PRESENT_PARAMETERS
+	rctx.swap_chain->Present1(0, flags, &params)
+	rctx.end_of_frame_fences[rctx.frame_index].graphics_queue_fence_value = queue_signal_fence(&rctx.graphics_queue)
+}
+
+@(private)
+submit_work :: proc(command: ^Command) -> Command_Submission_Result {
+	if rctx.num_command_submissions[rctx.frame_index] >= MAX_COMMAND_SUBMISSIONS_PER_FRAME {
+		assert(false, "Too many command submissions per frame")
+	}
+
+	fence_result: u64
+	#partial switch command.type {
+	case .DIRECT:
+		fence_result = queue_execute_command_list(&rctx.graphics_queue, cast(^d3d12.ICommandList)command.command_list)
+		break;
+	}
+
+	submission_result := Command_Submission_Result {
+		frame_index = rctx.frame_index,
+		submission_index = rctx.num_command_submissions[rctx.frame_index],
+	}
+
+	command_submission := Command_Submission {
+		type = command.type,
+		fence_value = fence_result,
+	}
+
+	rctx.command_submissions[rctx.frame_index][rctx.num_command_submissions[rctx.frame_index]] = command_submission
+	rctx.num_command_submissions[rctx.frame_index] += 1
+
+	return submission_result
 }
 
 @(private)
 wait_for_idle :: proc() {
 	queue_wait_for_idle(&rctx.graphics_queue)
 }
-
 
 @(private)
 check_hr :: proc(res: d3d12.HRESULT, message: string) {
