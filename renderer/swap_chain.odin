@@ -9,7 +9,6 @@ ALLOW_HDR :: true
 
 @(private="package")
 swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
-	assert(rctx.factory != nil, "Factory not initialized")
 	assert(rctx.device != nil, "Device not initialized")
 	assert(rctx.graphics_queue.queue != nil, "Graphics command queue not initialized")
 	assert(window_handle != nil, "No native window handle provided")
@@ -24,9 +23,10 @@ swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 		SampleDesc = { Count = 1 },
 		BufferUsage = { .RENDER_TARGET_OUTPUT },
 		BufferCount = SWAP_CHAIN_BUFFER_COUNT,
-		Scaling = .STRETCH,
+		Scaling = .NONE,
 		SwapEffect = .FLIP_DISCARD,
 		AlphaMode = .IGNORE,
+		Flags = { .ALLOW_MODE_SWITCH },
 	}
 
 	fullscreen_desc := dxgi.SWAP_CHAIN_FULLSCREEN_DESC {
@@ -39,27 +39,16 @@ swap_chain_create :: proc(window_handle: dxgi.HWND, width: u32, height: u32) {
 	check_hr(hr, "Failed to create swap chain for window")
 	defer swap_chain_1->Release()
 
-	hr = rctx.factory->MakeWindowAssociation(window_handle, { .NO_ALT_ENTER })
-	check_hr(hr, "Failed to make window association")
-
 	hr = swap_chain_1->QueryInterface(dxgi.ISwapChain4_UUID, cast(^rawptr)&rctx.swap_chain)
 	check_hr(hr, "Failed query swap chain 4")
 
+	// Try to enable HDR Output
+	enable_hrd_output()
+
+	// hr = rctx.factory->MakeWindowAssociation(window_handle, { .NO_ALT_ENTER })
+	// check_hr(hr, "Failed to make window association")
+
 	swap_chain_create_back_buffers()
-
-	color_space: dxgi.COLOR_SPACE_TYPE 
-	if ALLOW_HDR && supports_hdr() {
-		color_space = .RGB_FULL_G22_NONE_P709
-	} else {
-		color_space = .RGB_FULL_G2084_NONE_P2020
-	}
-	color_space_support: dxgi.SWAP_CHAIN_COLOR_SPACE_SUPPORT
-	hr = rctx.swap_chain->CheckColorSpaceSupport(color_space, &color_space_support)
-	check_hr(hr, "Failed to check swap chain color space support")
-
-	if color_space_support == { .PRESENT } {
-		rctx.swap_chain->SetColorSpace1(color_space)
-	}
 }
 
 @(private="package")
@@ -104,25 +93,31 @@ swap_chain_release_back_buffers :: proc() {
 }
 
 @(private="file")
-supports_hdr :: proc() -> bool {
+enable_hrd_output :: proc() {
 	assert(rctx.swap_chain != nil, "Swap chain is not initialized")
+	rctx.hdr_output = false
 
 	dxgi_output: ^dxgi.IOutput
-	if windows.SUCCEEDED(rctx.swap_chain->GetContainingOutput(&dxgi_output)) {
-		defer dxgi_output->Release()
+	dxgi_output6: ^dxgi.IOutput6
+	desc: dxgi.OUTPUT_DESC1
+	hdr_color_space_support: dxgi.SWAP_CHAIN_COLOR_SPACE_SUPPORT
+	hdr_color_space: dxgi.COLOR_SPACE_TYPE = .RGB_FULL_G2084_NONE_P2020
 
-		dxgi_output6: ^dxgi.IOutput6
-		if windows.SUCCEEDED(dxgi_output->QueryInterface(dxgi.IOutput6_UUID, cast(^rawptr)&dxgi_output6)) {
-			defer dxgi_output6->Release()
-
-			desc: dxgi.OUTPUT_DESC1
-			if windows.SUCCEEDED(dxgi_output6->GetDesc1(&desc)) {
-				if desc.ColorSpace == .RGB_FULL_G2084_NONE_P2020 {
-					return true
-				}
-			}
-		}
+	defer {
+		if dxgi_output6 != nil { dxgi_output6->Release() }
+		if dxgi_output != nil { dxgi_output->Release() }
 	}
 
-	return false
+	if windows.FAILED(rctx.swap_chain->GetContainingOutput(&dxgi_output)) { return }
+	if windows.FAILED(dxgi_output->QueryInterface(dxgi.IOutput6_UUID, cast(^rawptr)&dxgi_output6)) { return }
+	if windows.FAILED(dxgi_output6->GetDesc1(&desc)) { return }
+
+	if desc.ColorSpace != hdr_color_space { return }
+	if windows.FAILED(rctx.swap_chain->CheckColorSpaceSupport(hdr_color_space, &hdr_color_space_support)) { return }
+	
+	if hdr_color_space_support == { .PRESENT } {
+		if windows.SUCCEEDED(rctx.swap_chain->SetColorSpace1(hdr_color_space)) { 
+			rctx.hdr_output = true
+		}
+	}
 }
