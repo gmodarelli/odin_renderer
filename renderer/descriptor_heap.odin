@@ -169,7 +169,7 @@ render_pass_descriptor_heap_allocate_block :: proc(descriptor_heap: ^Descriptor_
 	if sync.mutex_guard(&descriptor_heap.usage_mutex) {
 		render_pass_heap := cast(^Descriptor_Heap_Render_Pass)&descriptor_heap.variant
 		block_end := render_pass_heap.current_descriptor_index + count
-		assert(block_end < descriptor_heap.max_descriptors, "Ran out of descriptor heap handles, need to increase heap size")
+		assert(block_end <= descriptor_heap.max_descriptors, "Ran out of descriptor heap handles, need to increase heap size")
 		heap_index = render_pass_heap.current_descriptor_index
 		render_pass_heap.current_descriptor_index = block_end
 	}
